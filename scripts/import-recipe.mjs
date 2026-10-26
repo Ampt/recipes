@@ -67,6 +67,11 @@ const LABELS = { photo: 'photos of a recipe', description: 'a description of a r
 const client = new Anthropic();
 
 async function extract(dir, input) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error(
+      "The ANTHROPIC_API_KEY secret isn't set on the repo (Settings → Secrets and variables → Actions). Add it, then tap Try again.",
+    );
+  }
   const content = [];
   for (const name of input.images ?? []) {
     const data = (await readFile(path.join(dir, name))).toString('base64');
