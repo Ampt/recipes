@@ -1,0 +1,83 @@
+---
+import Base from '../layouts/Base.astro';
+import { REPO } from '../config';
+---
+<Base title="Settings">
+  <div class="narrow">
+    <h1>Settings</h1>
+    <p>
+      Adding and deleting recipes needs a GitHub token. Without one the site is read-only. The token is saved only in
+      this browser.
+    </p>
+    <details>
+      <summary>How to make a token</summary>
+      <ol>
+        <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → New fine-grained token</a>.</li>
+        <li>Resource owner: <strong>{REPO.owner}</strong>. Repository access: <strong>Only select repositories → {REPO.owner}/{REPO.name}</strong>.</li>
+        <li>Repository permissions: <strong>Contents: Read and write</strong> and <strong>Actions: Read-only</strong>.</li>
+        <li>Pick an expiration, generate, and paste it below.</li>
+      </ol>
+    </details>
+
+    <form id="form">
+      <label for="token">GitHub token</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…" />
+      <div class="row">
+        <button class="primary" type="submit">Save</button>
+        <button id="clear" type="button">Remove token</button>
+      </div>
+    </form>
+    <p id="status" class="card notice" hidden></p>
+  </div>
+</Base>
+
+<style>
+  .narrow { max-width: 640px; margin: 0 auto; }
+  .row { display: flex; gap: 0.5rem; margin-top: 1rem; }
+  details { margin: 1rem 0; }
+  summary { cursor: pointer; font-weight: 600; }
+</style>
+
+<script>
+  import { getToken, gh, setToken } from '../scripts/github';
+
+  const input = document.querySelector<HTMLInputElement>('#token')!;
+  const status = document.querySelector<HTMLElement>('#status')!;
+
+  function show(kind: 'ok' | 'error' | '', text: string) {
+    status.hidden = false;
+    status.className = `card notice ${kind}`;
+    status.textContent = text;
+  }
+
+  async function check() {
+    if (!getToken()) return show('', 'No token saved. The site is read-only in this browser.');
+    show('', 'Checking token…');
+    try {
+      const repo = await gh<{ full_name: string; permissions?: { push?: boolean } }>('/{repo}');
+      if (repo.permissions?.push) show('ok', `Token works. You can add and delete recipes in ${repo.full_name}.`);
+      else show('error', `Token can read ${repo.full_name} but can't write. Give it Contents: Read and write.`);
+    } catch (err) {
+      show('error', `Token didn't work: ${(err as Error).message}`);
+    }
+  }
+
+  if (getToken()) input.placeholder = 'Token saved (paste a new one to replace it)';
+  check();
+
+  document.querySelector('#form')!.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const value = input.value.trim();
+    if (!value) return;
+    setToken(value);
+    input.value = '';
+    input.placeholder = 'Token saved (paste a new one to replace it)';
+    check();
+  });
+
+  document.querySelector('#clear')!.addEventListener('click', () => {
+    setToken(null);
+    input.placeholder = 'github_pat_…';
+    check();
+  });
+</script>

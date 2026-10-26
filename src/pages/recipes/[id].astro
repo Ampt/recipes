@@ -1,0 +1,198 @@
+---
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { getCollection, render, type CollectionEntry } from 'astro:content';
+import { Image } from 'astro:assets';
+import Base from '../../layouts/Base.astro';
+import { url } from '../../url';
+
+export async function getStaticPaths() {
+  const recipes = await getCollection('recipes');
+  return recipes.map((recipe) => ({ params: { id: recipe.id }, props: { recipe } }));
+}
+
+const { recipe } = Astro.props as { recipe: CollectionEntry<'recipes'> };
+const { Content } = await render(recipe);
+const d = recipe.data;
+
+// Repo paths the Delete button removes: the Markdown file plus its source images.
+const mdPath = recipe.filePath!;
+const raw = await readFile(mdPath, 'utf8');
+const imageRefs = (raw.match(/^sourceImages:\s*\[(.*)\]\s*$/m)?.[1] ?? '')
+  .split(',')
+  .map((s) => s.trim().replace(/^["']|["']$/g, ''))
+  .filter(Boolean);
+const repoFiles = [mdPath, ...imageRefs.map((ref) => path.posix.join(path.posix.dirname(mdPath), ref))];
+
+const sourceLabel = { photo: 'From a photo', description: 'From a description', 'ai-chat': 'From an AI chat' }[d.source];
+---
+<Base title={d.title}>
+  <article class="recipe" data-pagefind-body>
+    <a class="back no-print" href={url()} data-pagefind-ignore>← All recipes</a>
+    <h1 data-pagefind-meta="title">{d.title}</h1>
+    <p class="meta muted" data-pagefind-ignore>
+      {[d.prepTime && `Prep ${d.prepTime}`, d.cookTime && `Cook ${d.cookTime}`].filter(Boolean).join(' · ')}
+    </p>
+    {d.tags.length > 0 && <p class="tags">{d.tags.map((t) => <span class="chip">{t}</span>)}</p>}
+
+    <div class="actions no-print" data-pagefind-ignore>
+      {d.servings && (
+        <div class="scaler" role="group" aria-label="Servings">
+          <button type="button" id="less" aria-label="Fewer servings">−</button>
+          <span><strong id="servings" data-base={d.servings}>{d.servings}</strong> servings</span>
+          <button type="button" id="more" aria-label="More servings">+</button>
+        </div>
+      )}
+      <button type="button" id="cook" aria-pressed="false">Cook mode</button>
+      <button type="button" id="print">Print</button>
+      <button type="button" id="delete" class="danger" data-files={JSON.stringify(repoFiles)} data-title={d.title} hidden>
+        Delete
+      </button>
+    </div>
+    <p id="cook-note" class="muted no-print" hidden data-pagefind-ignore>Screen will stay on while cook mode is on.</p>
+    <p id="delete-status" class="card notice no-print" hidden data-pagefind-ignore></p>
+
+    <div class="body" id="body">
+      <Content />
+    </div>
+
+    {d.sourceImages.length > 0 && (
+      <details class="original no-print" data-pagefind-ignore>
+        <summary>Original {d.sourceImages.length > 1 ? 'photos' : 'photo'}</summary>
+        {d.sourceImages.map((img) => (
+          <a href={img.src}><Image src={img} alt={`Original recipe for ${d.title}`} width={900} loading="lazy" /></a>
+        ))}
+      </details>
+    )}
+    <p class="muted small" data-pagefind-ignore>
+      {sourceLabel} · added {d.dateAdded.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' })}
+    </p>
+  </article>
+</Base>
+
+<style>
+  .recipe { max-width: 720px; margin: 0 auto; }
+  .back { text-decoration: none; font-weight: 600; font-size: 0.95rem; }
+  .meta { margin: 0; }
+  .tags { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 1.2rem 0; }
+  .scaler { display: inline-flex; align-items: center; gap: 0.5rem; margin-right: 0.5rem; }
+  .scaler button { width: 2.4rem; height: 2.4rem; justify-content: center; padding: 0; font-size: 1.2rem; }
+  .body :global(h2) { font-size: 1.4rem; margin-top: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  .body :global(ul.ingredients) { list-style: none; padding: 0; }
+  .body :global(ul.ingredients li) {
+    padding: 0.45rem 0 0.45rem 2rem; position: relative; cursor: pointer; border-bottom: 1px dashed var(--border);
+    -webkit-tap-highlight-color: transparent; user-select: none;
+  }
+  .body :global(ul.ingredients li::before) {
+    content: ''; position: absolute; left: 0.2rem; top: 0.7rem; width: 1.1rem; height: 1.1rem;
+    border: 2px solid var(--muted); border-radius: 4px;
+  }
+  .body :global(ul.ingredients li.checked) { color: var(--muted); text-decoration: line-through; }
+  .body :global(ul.ingredients li.checked::before) { background: var(--accent); border-color: var(--accent); }
+  .body :global(ol li) { margin: 0.6rem 0; padding-left: 0.3rem; }
+  .body :global(ol li::marker) { font-weight: 700; color: var(--accent); }
+  .original { margin: 2rem 0 1rem; }
+  .original summary { cursor: pointer; font-weight: 600; }
+  .original img { margin-top: 0.8rem; border-radius: var(--radius); }
+  .small { font-size: 0.85rem; margin-top: 2rem; }
+
+  :global(body.cook) { font-size: 22px; }
+  :global(body.cook) .body :global(ol li) { margin: 1.1rem 0; }
+
+  @media print {
+    .tags { display: none; }
+    .body :global(ul.ingredients li) { border: 0; padding: 0.1rem 0 0.1rem 1.4rem; }
+    .body :global(ul.ingredients li::before) { top: 0.35rem; width: 0.8rem; height: 0.8rem; border-width: 1px; }
+    .body :global(ul.ingredients li.checked) { color: inherit; text-decoration: none; }
+  }
+</style>
+
+<script>
+  import { commitChanges, getToken } from '../../scripts/github';
+  import { url } from '../../url';
+  import { scaleText } from '../../scripts/scale';
+
+  const body = document.querySelector<HTMLElement>('#body')!;
+
+  // Every list between the "Ingredients" heading and the next h2 becomes a checklist.
+  const lists: HTMLUListElement[] = [];
+  const heading = [...body.querySelectorAll('h2')].find((h) => /ingredients/i.test(h.textContent ?? ''));
+  for (let el = heading?.nextElementSibling; el && el.tagName !== 'H2'; el = el.nextElementSibling) {
+    if (el.tagName === 'UL') lists.push(el as HTMLUListElement);
+  }
+  const items = lists.flatMap((ul) => {
+    ul.classList.add('ingredients');
+    return [...ul.querySelectorAll('li')];
+  });
+  for (const li of items) {
+    li.dataset.original = li.innerHTML;
+    li.addEventListener('click', () => li.classList.toggle('checked'));
+  }
+
+  // Servings scaler
+  const servingsEl = document.querySelector<HTMLElement>('#servings');
+  if (servingsEl) {
+    const base = Number(servingsEl.dataset.base);
+    let current = base;
+    const update = (n: number) => {
+      current = Math.max(1, n);
+      servingsEl.textContent = String(current);
+      for (const li of items) li.innerHTML = scaleText(li.dataset.original!, current / base);
+    };
+    document.querySelector('#less')!.addEventListener('click', () => update(current - 1));
+    document.querySelector('#more')!.addEventListener('click', () => update(current + 1));
+  }
+
+  // Cook mode: bigger text and keep the screen awake.
+  const cook = document.querySelector<HTMLButtonElement>('#cook')!;
+  const cookNote = document.querySelector<HTMLElement>('#cook-note')!;
+  let lock: WakeLockSentinel | null = null;
+  async function requestLock() {
+    try {
+      lock = await navigator.wakeLock?.request('screen');
+      cookNote.hidden = !lock;
+    } catch {
+      cookNote.hidden = true;
+    }
+  }
+  cook.addEventListener('click', async () => {
+    const on = cook.getAttribute('aria-pressed') !== 'true';
+    cook.setAttribute('aria-pressed', String(on));
+    document.body.classList.toggle('cook', on);
+    if (on) await requestLock();
+    else {
+      await lock?.release();
+      lock = null;
+      cookNote.hidden = true;
+    }
+  });
+  // The browser drops the lock when the tab is hidden; take it back on return.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && cook.getAttribute('aria-pressed') === 'true') requestLock();
+  });
+
+  document.querySelector('#print')!.addEventListener('click', () => window.print());
+
+  // Delete (only offered when a GitHub token is saved)
+  const del = document.querySelector<HTMLButtonElement>('#delete')!;
+  const status = document.querySelector<HTMLElement>('#delete-status')!;
+  if (getToken()) del.hidden = false;
+  del.addEventListener('click', async () => {
+    if (!confirm(`Delete "${del.dataset.title}"? You can get it back from the repo's git history.`)) return;
+    del.disabled = true;
+    status.hidden = false;
+    status.className = 'card notice';
+    status.textContent = 'Deleting…';
+    try {
+      const files: string[] = JSON.parse(del.dataset.files!);
+      await commitChanges(`Delete recipe: ${del.dataset.title}`, files.map((path) => ({ path, delete: true })));
+      status.className = 'card notice ok';
+      status.innerHTML = `Deleted. The site will update in a minute or two. <a href="${url()}">Back to all recipes</a>`;
+    } catch (err) {
+      status.className = 'card notice error';
+      status.textContent = `Couldn't delete: ${(err as Error).message}`;
+      del.disabled = false;
+    }
+  });
+</script>

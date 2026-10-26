@@ -1,0 +1,138 @@
+---
+import { getCollection } from 'astro:content';
+import { Image } from 'astro:assets';
+import Base from '../layouts/Base.astro';
+import { url } from '../url';
+
+const recipes = (await getCollection('recipes')).sort(
+  (a, b) => b.data.dateAdded.getTime() - a.data.dateAdded.getTime() || a.data.title.localeCompare(b.data.title),
+);
+const tagCounts = new Map<string, number>();
+for (const r of recipes) for (const t of r.data.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+const tags = [...tagCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t);
+---
+<Base>
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="Search recipes, ingredients…" autocomplete="off" aria-label="Search recipes" />
+    {tags.length > 0 && (
+      <div class="tags" role="group" aria-label="Filter by tag">
+        {tags.map((t) => <button class="chip" type="button" data-tag={t} aria-pressed="false">{t}</button>)}
+      </div>
+    )}
+  </div>
+
+  {recipes.length === 0 ? (
+    <p class="muted">No recipes yet. <a href={url('add/')}>Add the first one.</a></p>
+  ) : (
+    <ul class="grid" id="grid">
+      {recipes.map((r) => (
+        <li class="card recipe-card" data-tags={r.data.tags.join('|')} data-title={r.data.title.toLowerCase()}>
+          <a href={url(`recipes/${r.id}/`)}>
+            {r.data.sourceImages[0] && (
+              <Image src={r.data.sourceImages[0]} alt="" width={480} height={300} fit="cover" class="thumb" loading="lazy" />
+            )}
+            <h2>{r.data.title}</h2>
+          </a>
+          <p class="meta muted">
+            {[r.data.prepTime && `Prep ${r.data.prepTime}`, r.data.cookTime && `Cook ${r.data.cookTime}`, r.data.servings && `Serves ${r.data.servings}`]
+              .filter(Boolean)
+              .join(' · ')}
+          </p>
+          {r.data.tags.length > 0 && <p class="card-tags">{r.data.tags.map((t) => <span class="chip">{t}</span>)}</p>}
+        </li>
+      ))}
+    </ul>
+  )}
+  <p id="empty" class="muted" hidden>No recipes match.</p>
+</Base>
+
+<style>
+  .toolbar { display: grid; gap: 0.8rem; margin: 0.5rem 0 1.5rem; }
+  .tags { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .tags .chip { cursor: pointer; }
+  .tags .chip[aria-pressed='true'] { background: var(--accent); color: var(--accent-text); }
+  .grid { list-style: none; padding: 0; margin: 0; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }
+  .recipe-card { overflow: hidden; display: flex; flex-direction: column; }
+  .recipe-card a { color: inherit; text-decoration: none; }
+  .recipe-card a:hover h2 { color: var(--accent); }
+  .recipe-card .thumb { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
+  .recipe-card h2 { font-size: 1.25rem; margin: 0.9rem 1rem 0.2rem; }
+  .meta { margin: 0 1rem; font-size: 0.9rem; }
+  .card-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.7rem 1rem 1rem; }
+  .card-tags .chip { font-size: 0.75rem; }
+</style>
+
+<script>
+  const search = document.querySelector<HTMLInputElement>('#search')!;
+  const cards = [...document.querySelectorAll<HTMLElement>('.recipe-card')];
+  const chips = [...document.querySelectorAll<HTMLButtonElement>('.tags .chip')];
+  const empty = document.querySelector<HTMLElement>('#empty')!;
+
+  const active = new Set<string>();
+  let matches: Set<string> | null = null; // card hrefs matching the search, null = no query
+
+  function apply() {
+    let shown = 0;
+    for (const card of cards) {
+      const href = card.querySelector('a')!.getAttribute('href')!;
+      const cardTags = card.dataset.tags ? card.dataset.tags.split('|') : [];
+      const ok = [...active].every((t) => cardTags.includes(t)) && (!matches || matches.has(href));
+      card.hidden = !ok;
+      if (ok) shown++;
+    }
+    empty.hidden = shown > 0 || cards.length === 0;
+  }
+
+  for (const chip of chips) {
+    chip.addEventListener('click', () => {
+      const tag = chip.dataset.tag!;
+      if (active.has(tag)) active.delete(tag);
+      else active.add(tag);
+      chip.setAttribute('aria-pressed', String(active.has(tag)));
+      apply();
+    });
+  }
+
+  // Pagefind is generated after `astro build`, so it is missing under `astro dev`;
+  // fall back to matching titles there.
+  type Pagefind = {
+    options(o: { baseUrl: string }): Promise<void>;
+    search(q: string): Promise<{ results: { data(): Promise<{ url: string }> }[] }>;
+  };
+  const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+  let pagefind: Promise<Pagefind | null> | undefined;
+  function loadPagefind() {
+    pagefind ??= import(/* @vite-ignore */ `${base}pagefind/pagefind.js`)
+      .then(async (pf: Pagefind) => {
+        await pf.options({ baseUrl: base });
+        return pf;
+      })
+      .catch(() => null);
+    return pagefind;
+  }
+
+  let seq = 0;
+  search.addEventListener('input', async () => {
+    const q = search.value.trim();
+    const mine = ++seq;
+    if (!q) {
+      matches = null;
+      return apply();
+    }
+    const pf = await loadPagefind();
+    let found: Set<string>;
+    if (pf) {
+      const res = await pf.search(q);
+      const data = await Promise.all(res.results.map((r) => r.data()));
+      found = new Set(data.map((d) => d.url));
+    } else {
+      found = new Set(
+        cards.filter((c) => c.dataset.title!.includes(q.toLowerCase())).map((c) => c.querySelector('a')!.getAttribute('href')!),
+      );
+    }
+    if (mine !== seq) return;
+    matches = found;
+    apply();
+  });
+  search.addEventListener('focus', loadPagefind, { once: true });
+</script>

@@ -1,0 +1,32 @@
+---
+import '../styles/global.css';
+import { SITE_TITLE } from '../config';
+import { url } from '../url';
+
+interface Props {
+  title?: string;
+}
+const { title } = Astro.props;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href={url('favicon.svg')} type="image/svg+xml" />
+    <title>{title ? `${title} · ${SITE_TITLE}` : SITE_TITLE}</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href={url()}>{SITE_TITLE}</a>
+      <nav>
+        <a href={url('add/')}>Add</a>
+        <a href={url('settings/')} aria-label="Settings">Settings</a>
+      </nav>
+    </header>
+    <main>
+      <slot />
+    </main>
+  </body>
+</html>

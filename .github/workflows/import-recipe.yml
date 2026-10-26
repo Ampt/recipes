@@ -1,0 +1,55 @@
+name: Import recipe
+
+on:
+  push:
+    branches: [main]
+    paths: ['inbox/**']
+  workflow_dispatch:
+
+# One import at a time; each run handles every folder waiting in inbox/.
+concurrency:
+  group: import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      imported: ${{ steps.import.outputs.imported }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - id: import
+        run: npm run import
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Commit and push
+        if: steps.import.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898273+github-actions[bot]@users.noreply.github.com"
+          git add -A src/content/recipes inbox
+          git commit -F COMMIT_MSG
+          for attempt in 1 2 3 4 5; do
+            git push origin HEAD:main && exit 0
+            sleep $((attempt * 2))
+            git pull --rebase origin main
+          done
+          exit 1
+
+  deploy:
+    needs: import
+    if: needs.import.outputs.imported == 'true'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/deploy.yml

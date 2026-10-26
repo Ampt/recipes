@@ -1,0 +1,297 @@
+---
+import Base from '../layouts/Base.astro';
+import { url } from '../url';
+---
+<Base title="Add a recipe">
+  <div class="narrow">
+    <h1>Add a recipe</h1>
+
+    <div id="no-token" class="card notice" hidden>
+      Adding recipes needs a GitHub token. <a href={url('settings/')}>Add one in Settings.</a>
+    </div>
+
+    <form id="form">
+      <div class="tabs" role="tablist" aria-label="How are you adding it?">
+        <button type="button" role="tab" id="tab-photo" aria-controls="panel-photo" aria-selected="true" data-type="photo">Photo</button>
+        <button type="button" role="tab" id="tab-description" aria-controls="panel-description" aria-selected="false" data-type="description">Describe it</button>
+        <button type="button" role="tab" id="tab-ai-chat" aria-controls="panel-ai-chat" aria-selected="false" data-type="ai-chat">Paste AI chat</button>
+      </div>
+
+      <section id="panel-photo" role="tabpanel" aria-labelledby="tab-photo">
+        <label for="photos">Photos of the recipe (a cookbook page, a recipe card, several pages are fine)</label>
+        <input id="photos" type="file" accept="image/*,.heic,.heif" multiple />
+        <ul id="previews" class="previews"></ul>
+      </section>
+      <section id="panel-description" role="tabpanel" aria-labelledby="tab-description" hidden>
+        <label for="description">Describe the recipe</label>
+        <textarea id="description" rows="8" placeholder="Mom's lemon bars: shortbread crust, 2 cups flour, 1/2 cup powdered sugar…"></textarea>
+      </section>
+      <section id="panel-ai-chat" role="tabpanel" aria-labelledby="tab-ai-chat" hidden>
+        <label for="chat">Paste the conversation (copy the text; share links aren't fetched)</label>
+        <textarea id="chat" rows="12"></textarea>
+      </section>
+
+      <label for="notes">Notes (optional)</label>
+      <textarea id="notes" rows="3" placeholder="We use half the sugar. Great for a crowd."></textarea>
+
+      <div class="row">
+        <button id="submit" class="primary" type="submit">Add recipe</button>
+      </div>
+    </form>
+
+    <div id="progress" class="card notice" hidden aria-live="polite">
+      <ol class="steps">
+        <li data-step="upload">Uploading</li>
+        <li data-step="import">Reading the recipe</li>
+        <li data-step="deploy">Publishing</li>
+      </ol>
+      <p id="message"></p>
+      <div class="row">
+        <button id="retry" type="button" hidden>Try again</button>
+        <a id="another" class="button" href={url('add/')} hidden>Add another</a>
+      </div>
+    </div>
+  </div>
+</Base>
+
+<style>
+  .narrow { max-width: 640px; margin: 0 auto; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 1rem 0 0.5rem; }
+  .tabs [aria-selected='true'] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .row { display: flex; gap: 0.5rem; margin-top: 1.2rem; flex-wrap: wrap; }
+  input[type='file'] { font: inherit; width: 100%; }
+  .previews { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 0.5rem; margin-top: 0.8rem; }
+  .previews li { position: relative; }
+  .previews img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; }
+  .previews button { position: absolute; top: 4px; right: 4px; padding: 0.1em 0.5em; font-size: 0.8rem; }
+  .steps { margin: 0; padding-left: 1.4rem; }
+  .steps li { color: var(--muted); }
+  .steps li.active { color: var(--text); font-weight: 600; }
+  .steps li.done { color: var(--ok); }
+  .steps li.done::after { content: ' ✓'; }
+  .steps li.failed { color: var(--danger); }
+  #message { margin-bottom: 0; }
+</style>
+
+<script>
+  import { commitChanges, getToken, gh, GitHubError, textToBase64, type FileChange } from '../scripts/github';
+  import { blobToBase64, toJpeg } from '../scripts/images';
+  import { url } from '../url';
+
+  type InputType = 'photo' | 'description' | 'ai-chat';
+
+  const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
+  const form = $<HTMLFormElement>('#form');
+  const submit = $<HTMLButtonElement>('#submit');
+  const progress = $('#progress');
+  const message = $('#message');
+  const retry = $<HTMLButtonElement>('#retry');
+  const another = $<HTMLAnchorElement>('#another');
+
+  if (!getToken()) {
+    $('#no-token').hidden = false;
+    submit.disabled = true;
+  }
+
+  // Tabs
+  let type: InputType = 'photo';
+  const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role=tab]')];
+  for (const tab of tabs) {
+    tab.addEventListener('click', () => {
+      type = tab.dataset.type as InputType;
+      for (const t of tabs) {
+        const on = t === tab;
+        t.setAttribute('aria-selected', String(on));
+        document.getElementById(t.getAttribute('aria-controls')!)!.hidden = !on;
+      }
+    });
+  }
+
+  // Photo picker with removable previews; the picker appends, so photos can be added a few at a time.
+  const photosInput = $<HTMLInputElement>('#photos');
+  const previews = $('#previews');
+  let photos: File[] = [];
+  function renderPreviews() {
+    previews.replaceChildren(
+      ...photos.map((file, i) => {
+        const li = document.createElement('li');
+        const img = document.createElement('img');
+        img.alt = file.name;
+        img.src = URL.createObjectURL(file);
+        img.onload = () => URL.revokeObjectURL(img.src);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '✕';
+        remove.setAttribute('aria-label', `Remove ${file.name}`);
+        remove.onclick = () => {
+          photos.splice(i, 1);
+          renderPreviews();
+        };
+        li.append(img, remove);
+        return li;
+      }),
+    );
+  }
+  photosInput.addEventListener('change', () => {
+    photos.push(...(photosInput.files ?? []));
+    photosInput.value = '';
+    renderPreviews();
+  });
+
+  // Progress display
+  function setStep(step: 'upload' | 'import' | 'deploy' | 'done', failed = false) {
+    const order = ['upload', 'import', 'deploy'];
+    const idx = step === 'done' ? order.length : order.indexOf(step);
+    document.querySelectorAll<HTMLElement>('.steps li').forEach((li, i) => {
+      li.className = i < idx ? 'done' : i === idx ? (failed ? 'failed' : 'active') : '';
+    });
+  }
+  function say(text: string, html = false) {
+    if (html) message.innerHTML = text;
+    else message.textContent = text;
+  }
+
+  // Submit: one commit adding inbox/<id>/ with the photos and input.json.
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = type === 'description' ? $<HTMLTextAreaElement>('#description').value.trim()
+      : type === 'ai-chat' ? $<HTMLTextAreaElement>('#chat').value.trim() : '';
+    const notes = $<HTMLTextAreaElement>('#notes').value.trim();
+    if (type === 'photo' && photos.length === 0) return alert('Add at least one photo.');
+    if (type !== 'photo' && !text) return alert('Add some text first.');
+
+    submit.disabled = true;
+    progress.hidden = false;
+    form.hidden = true;
+    setStep('upload');
+    say(type === 'photo' ? 'Shrinking photos…' : 'Uploading…');
+
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+    const id = `${stamp}-${Math.random().toString(36).slice(2, 6)}`;
+    try {
+      const changes: FileChange[] = [];
+      const images: string[] = [];
+      for (const [i, file] of photos.entries()) {
+        if (type !== 'photo') break;
+        const name = `${i + 1}.jpg`;
+        changes.push({ path: `inbox/${id}/${name}`, base64: await blobToBase64(await toJpeg(file)) });
+        images.push(name);
+      }
+      const input = { type, text, notes, images, attempt: 1, createdAt: new Date().toISOString() };
+      changes.push({ path: `inbox/${id}/input.json`, base64: textToBase64(JSON.stringify(input, null, 2) + '\n') });
+      say('Uploading…');
+      const sha = await commitChanges(`Import recipe (inbox ${id})`, changes);
+      await track(id, sha);
+    } catch (err) {
+      setStep('upload', true);
+      say(`Upload failed: ${(err as Error).message}`);
+      form.hidden = false;
+      submit.disabled = false;
+    }
+  });
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function findRecipeSlug(id: string): Promise<string | null> {
+    const commits = await gh<{ commit: { message: string } }[]>(`/{repo}/commits?path=inbox/${id}&per_page=20`);
+    for (const c of commits) {
+      const m = c.commit.message.match(new RegExp(`^Inbox: ${id}\\nRecipe: (\\S+)$`, 'm'));
+      if (m) return m[1];
+    }
+    return null;
+  }
+
+  async function readError(id: string): Promise<string | null> {
+    try {
+      const file = await gh<{ content: string }>(`/{repo}/contents/inbox/${id}/error.txt`);
+      const bytes = Uint8Array.from(atob(file.content.replace(/\n/g, '')), (c) => c.charCodeAt(0));
+      return new TextDecoder().decode(bytes).trim();
+    } catch (err) {
+      if (err instanceof GitHubError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  async function findRun(sha: string) {
+    const runs = await gh<{ workflow_runs: { path: string; status: string; conclusion: string | null; html_url: string; id: number }[] }>(
+      `/{repo}/actions/runs?head_sha=${sha}&per_page=20`,
+    );
+    return runs.workflow_runs.find((r) => r.path.endsWith('import-recipe.yml')) ?? null;
+  }
+
+  // Follow the import: the run triggered by our commit, then the import commit
+  // ("Recipe: <slug>" trailer), then the published page itself.
+  async function track(id: string, sha: string) {
+    retry.hidden = true;
+    setStep('import');
+    say('Waiting for the import to start…');
+    const started = Date.now();
+    let slug: string | null = null;
+    while (!slug) {
+      await sleep(5000);
+      try {
+        slug = await findRecipeSlug(id);
+        if (slug) break;
+        const error = await readError(id);
+        if (error) return fail(id, error);
+        const run = await findRun(sha);
+        if (run?.status === 'completed' && run.conclusion === 'failure') {
+          return fail(id, `The import workflow failed. <a href="${run.html_url}" target="_blank" rel="noopener">See the run log</a>.`, true);
+        }
+        if (run && run.status !== 'queued') say('Claude is reading the recipe…');
+        else if (Date.now() - started > 60_000) say('Still waiting for GitHub Actions to pick this up…');
+      } catch (err) {
+        say(`Having trouble checking progress (${(err as Error).message}). Still trying…`);
+      }
+      if (Date.now() - started > 15 * 60_000) {
+        return fail(id, 'This is taking much longer than expected. Check the Actions tab on GitHub.');
+      }
+    }
+
+    setStep('deploy');
+    say('Got it. Publishing the site…');
+    const page = url(`recipes/${slug}/`);
+    while (true) {
+      try {
+        const res = await fetch(`${page}?t=${Date.now()}`, { cache: 'no-store', method: 'HEAD' });
+        if (res.ok) break;
+      } catch {}
+      if (Date.now() - started > 20 * 60_000) {
+        return say(`Imported, but the site hasn't updated yet. It should appear at <a href="${page}">${page}</a> soon.`, true);
+      }
+      await sleep(5000);
+    }
+    setStep('done');
+    say(`Done! <a href="${page}">Open the recipe →</a>`, true);
+    another.hidden = false;
+  }
+
+  let retryId = '';
+  function fail(id: string, text: string, html = false) {
+    setStep('import', true);
+    say(text, html);
+    retryId = id;
+    retry.hidden = false;
+    another.hidden = false;
+  }
+
+  // Retry: clear error.txt and bump the attempt count in input.json; the push re-triggers the import.
+  retry.addEventListener('click', async () => {
+    retry.disabled = true;
+    try {
+      const id = retryId;
+      const file = await gh<{ content: string }>(`/{repo}/contents/inbox/${id}/input.json`);
+      const input = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(file.content.replace(/\n/g, '')), (c) => c.charCodeAt(0))));
+      input.attempt = (input.attempt ?? 1) + 1;
+      const changes: FileChange[] = [{ path: `inbox/${id}/input.json`, base64: textToBase64(JSON.stringify(input, null, 2) + '\n') }];
+      if ((await readError(id)) !== null) changes.push({ path: `inbox/${id}/error.txt`, delete: true });
+      const sha = await commitChanges(`Retry recipe import (inbox ${id})`, changes);
+      another.hidden = true;
+      await track(id, sha);
+    } catch (err) {
+      say(`Retry failed: ${(err as Error).message}`);
+    } finally {
+      retry.disabled = false;
+    }
+  });
+</script>
