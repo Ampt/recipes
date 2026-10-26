@@ -18,8 +18,13 @@ import { url } from '../url';
       </div>
 
       <section id="panel-photo" role="tabpanel" aria-labelledby="tab-photo">
-        <label for="photos">Photos of the recipe (a cookbook page, a recipe card, several pages are fine)</label>
-        <input id="photos" type="file" accept="image/*,.heic,.heif" multiple />
+        <p class="field-label">Photos of the recipe (a cookbook page, a recipe card, several pages are fine)</p>
+        <label class="dropzone" id="dropzone" for="photos">
+          <input id="photos" type="file" accept="image/*,.heic,.heif" multiple />
+          <strong>Drop photos here</strong>
+          <span class="muted">or tap to choose</span>
+        </label>
+        <p id="drop-note" class="muted" hidden></p>
         <ul id="previews" class="previews"></ul>
       </section>
       <section id="panel-description" role="tabpanel" aria-labelledby="tab-description" hidden>
@@ -59,7 +64,18 @@ import { url } from '../url';
   .tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 1rem 0 0.5rem; }
   .tabs [aria-selected='true'] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
   .row { display: flex; gap: 0.5rem; margin-top: 1.2rem; flex-wrap: wrap; }
-  input[type='file'] { font: inherit; width: 100%; }
+  .field-label { font-weight: 600; margin: 1rem 0 0.4rem; }
+  .dropzone {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.2rem;
+    min-height: 9rem; margin: 0; padding: 1.5rem; text-align: center; cursor: pointer; font-weight: 400;
+    background: var(--surface); border: 2px dashed var(--border); border-radius: var(--radius);
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .dropzone:hover, .dropzone.dragging { border-color: var(--accent); }
+  .dropzone.dragging { background: var(--chip); }
+  .dropzone:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Visually hidden but still focusable and clickable through the label. */
+  .dropzone input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
   .previews { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 0.5rem; margin-top: 0.8rem; }
   .previews li { position: relative; }
   .previews img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; }
@@ -132,10 +148,51 @@ import { url } from '../url';
       }),
     );
   }
-  photosInput.addEventListener('change', () => {
-    photos.push(...(photosInput.files ?? []));
-    photosInput.value = '';
+  const dropNote = $('#drop-note');
+  // HEIC files often arrive with an empty MIME type outside Safari, so also check the extension.
+  const isImage = (f: File) => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name);
+  function addPhotos(files: Iterable<File>) {
+    const all = [...files];
+    const images = all.filter(isImage);
+    const skipped = all.length - images.length;
+    dropNote.hidden = skipped === 0;
+    dropNote.textContent = skipped ? `Skipped ${skipped} file${skipped > 1 ? 's' : ''} that ${skipped > 1 ? "aren't images" : "isn't an image"}.` : '';
+    photos.push(...images);
     renderPreviews();
+  }
+  photosInput.addEventListener('change', () => {
+    addPhotos(photosInput.files ?? []);
+    photosInput.value = '';
+  });
+
+  // Drag and drop: photos dropped anywhere on the page land in the Photo tab.
+  // Handling the whole window also stops the browser from opening a missed drop as a new page.
+  const dropzone = $('#dropzone');
+  const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false;
+  let dragDepth = 0;
+  window.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e) || form.hidden) return;
+    dragDepth++;
+    dropzone.classList.add('dragging');
+  });
+  window.addEventListener('dragleave', (e) => {
+    if (!hasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) dropzone.classList.remove('dragging');
+  });
+  window.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = form.hidden ? 'none' : 'copy';
+  });
+  window.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    dropzone.classList.remove('dragging');
+    if (form.hidden) return; // already submitting
+    if (type !== 'photo') $<HTMLButtonElement>('#tab-photo').click();
+    addPhotos(e.dataTransfer!.files);
   });
 
   // Progress display
