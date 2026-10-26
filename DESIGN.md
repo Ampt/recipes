@@ -1,6 +1,6 @@
 # Recipe site design
 
-A recipe catalog for Matt and his wife. Static site on GitHub Pages, private repo (`Ampt/recipes`, GitHub paid plan). No backend, no review step: imports commit straight to `main`, git history is the undo.
+A recipe catalog for Matt and his wife. Static site on GitHub Pages, public repo (`Ampt/recipes`, free plan). No backend, no review step: imports commit straight to `main`, git history is the undo.
 
 ## Recipe format
 
@@ -46,6 +46,6 @@ Secret: `ANTHROPIC_API_KEY` in repo Actions secrets.
 
 ## Notes
 
-- Pages on a private repo still serves a **public** site (private Pages needs Enterprise). URL is unlisted; that's accepted. Pages also send `noindex`.
+- The repo is **public** (made public 2026-10-26): the free plan has no Pages for private repos, and we chose that over upgrading to Pro or hosting elsewhere. Recipes, photos and git history are visible to anyone; the site is unlisted and sends `noindex`. Never commit secrets: the API key lives only in Actions secrets and the PATs only in each browser.
 - A pasted AI conversation is just text; share links aren't fetched.
 - Later: OAuth sign-in via a small Cloudflare Worker, meal plan / grocery list, "made it" log, import from URL.
